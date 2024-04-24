@@ -3,77 +3,22 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
+#include <errno.h>
 
 #define PORT 8888
+#define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
 
-void handle_client(int client_fd) {
-    char buffer[BUFFER_SIZE];
-
-    // 读取客户端请求
-    ssize_t bytes_received;
-    if ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) == -1) {
-        perror("Receive failed");
-        close(client_fd);
-        return;
-    }
-
-    buffer[bytes_received] = '\0';
-
-    // 如果客户端请求上传文件
-    if (strcmp(buffer, "UPLOAD") == 0) {
-        FILE *file = fopen("received_file", "wb");
-        if (file == NULL) {
-            perror("File opening failed");
-            close(client_fd);
-            return;
-        }
-
-        printf("Receiving file from client...\n");
-
-        // 接收文件数据并写入文件
-        while ((bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0)) > 0) {
-            fwrite(buffer, 1, bytes_received, file);
-        }
-
-        fclose(file);
-        printf("File received and saved as 'received_file'\n");
-    }
-    // 如果客户端请求下载文件
-    else if (strcmp(buffer, "DOWNLOAD") == 0) {
-        FILE *file = fopen("file_to_send", "rb");
-        if (file == NULL) {
-            perror("File opening failed");
-            close(client_fd);
-            return;
-        }
-
-        printf("Sending file to client...\n");
-
-        // 从文件读取数据并发送给客户端
-        while ((bytes_received = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-            if (send(client_fd, buffer, bytes_received, 0) == -1) {
-                perror("Send failed");
-                fclose(file);
-                close(client_fd);
-                return;
-            }
-        }
-
-        fclose(file);
-        printf("File sent to client\n");
-    }
-
-    // 关闭与客户端的连接
-    close(client_fd);
-}
-
 int main() {
-    int server_fd, client_fd;
+    int server_fd, client_fd, max_fd, activity, i, valread;
+    int client_sockets[MAX_CLIENTS] = {0};
+    fd_set readfds;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len;
+    char buffer[BUFFER_SIZE];
 
-    // 创建套接字
+    // 创建服务器套接字
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -99,28 +44,72 @@ int main() {
 
     printf("Server listening on port %d...\n", PORT);
 
+    // 清空文件描述符集合
+    FD_ZERO(&readfds);
+
+    // 添加服务器套接字到文件描述符集合
+    FD_SET(server_fd, &readfds);
+    max_fd = server_fd;
+
     while (1) {
-        // 接受客户端连接
-        client_addr_len = sizeof(client_addr);
-        if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) {
-            perror("Accept failed");
+        // 复制文件描述符集合，因为 select() 会修改它
+        fd_set temp_fds = readfds;
+
+        // 使用 select() 监视可读事件
+        activity = select(max_fd + 1, &temp_fds, NULL, NULL, NULL);
+        if ((activity < 0) && (errno != EINTR)) {
+            perror("Select failed");
             exit(EXIT_FAILURE);
         }
 
-        printf("Client connected from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        // 如果服务器套接字准备好接收连接
+        if (FD_ISSET(server_fd, &temp_fds)) {
+            // 接受客户端连接
+            client_addr_len = sizeof(client_addr);
+            if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) {
+                perror("Accept failed");
+                exit(EXIT_FAILURE);
+            }
 
-        // 创建子进程处理客户端连接
-        pid_t pid = fork();
-        if (pid == -1) {
-            perror("Fork failed");
-            close(client_fd);
-            continue;
-        } else if (pid == 0) { // 子进程
-            close(server_fd); // 关闭不需要的服务器套接字
-            handle_client(client_fd); // 处理客户端连接
-            exit(EXIT_SUCCESS);
-        } else { // 父进程
-            close(client_fd); // 关闭不需要的客户端套接字
+            printf("Client connected from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
+            // 将新的客户端套接字添加到数组中
+            for (i = 0; i < MAX_CLIENTS; i++) {
+                if (client_sockets[i] == 0) {
+                    client_sockets[i] = client_fd;
+                    break;
+                }
+            }
+
+            // 添加新的客户端套接字到文件描述符集合
+            FD_SET(client_fd, &readfds);
+
+            // 更新最大文件描述符数
+            if (client_fd > max_fd) {
+                max_fd = client_fd;
+            }
+        }
+
+        // 处理客户端请求
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            client_fd = client_sockets[i];
+
+            if (FD_ISSET(client_fd, &temp_fds)) {
+                // 接收客户端数据
+                if ((valread = read(client_fd, buffer, BUFFER_SIZE)) == 0) {
+                    // 客户端断开连接
+                    printf("Client disconnected\n");
+                    close(client_fd);
+                    FD_CLR(client_fd, &readfds);
+                    client_sockets[i] = 0;
+                } else {
+                    // 处理客户端数据，这里可以根据具体需求编写处理逻辑
+                    // 示例中直接将数据原样返回给客户端
+                    buffer[valread] = '\0';
+                    printf("Received message from client: %s\n", buffer);
+                    send(client_fd, buffer, strlen(buffer), 0);
+                }
+            }
         }
     }
 
@@ -129,4 +118,3 @@ int main() {
 
     return 0;
 }
-
