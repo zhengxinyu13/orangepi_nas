@@ -5,10 +5,11 @@
 #include <arpa/inet.h>
 
 #define SERVER_IP "192.168.31.72"
-#define PORT 8888
+#define PORT 9999
 #define BUFFER_SIZE 1024
 
-int main() {
+int main()
+{
     int client_fd;
     struct sockaddr_in server_addr;
     char buffer[BUFFER_SIZE];
@@ -26,6 +27,9 @@ int main() {
     server_addr.sin_port = htons(PORT);
 
     // 连接服务器
+    // yangzihan add -> connect会导致阻塞，采用定时器超时唤醒解决阻塞时间过长的问题
+    // yangzihan add -> 或者优化为连接线程，把连接这种阻塞的动作切异步出去，先让后面的fgets运行起来，fgets后等信号量
+    // yangzihan add -> 连接线程里面连接成功通知信号给这里的等待。这样fgets就不会被connect阻塞住起不来。不然connect没连上用户一直看不到fgets
     if (connect(client_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         perror("Connection failed");
         exit(EXIT_FAILURE);
@@ -39,6 +43,8 @@ int main() {
     buffer[strcspn(buffer, "\n")] = '\0'; // 去除换行符
 
     // 发送选择到服务器
+    // yangzihan add -> 所有的send和recv都不应该阻塞套接字，接收发送要设置NON_WAIT
+    // yangzihan add -> 你想写10字节，套接字可能只有8字节空闲，剩下2字节写不进去要while(ret != 0)循环写进去
     if (send(client_fd, buffer, strlen(buffer), 0) == -1) {
         perror("Send failed");
         close(client_fd);

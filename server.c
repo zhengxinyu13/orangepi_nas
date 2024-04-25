@@ -12,7 +12,8 @@
 #define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
 
-void send_file(int client_fd, const char *filename) {
+void send_file(int client_fd, const char *filename)
+{
     FILE *fp;
     char buffer[BUFFER_SIZE];
     size_t bytes_read;
@@ -36,7 +37,8 @@ void send_file(int client_fd, const char *filename) {
     fclose(fp);
 }
 
-int main() {
+int main()
+{
     int server_fd, client_fd, max_fd, activity, i, valread;
     int client_sockets[MAX_CLIENTS] = {0};
     fd_set readfds;
@@ -54,12 +56,14 @@ int main() {
     int enable_reuse = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable_reuse, sizeof(enable_reuse)) < 0) {
         perror("Setsockopt SO_REUSEADDR failed");
+        // yangzihan add -> exit前记得关套接字
         exit(EXIT_FAILURE);
     }
 
     // 设置服务器套接字选项，启用端口复用
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &enable_reuse, sizeof(enable_reuse)) < 0) {
         perror("Setsockopt SO_REUSEPORT failed");
+        // yangzihan add -> exit前记得关套接字
         exit(EXIT_FAILURE);
     }
 
@@ -72,12 +76,14 @@ int main() {
     // 绑定套接字
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         perror("Bind failed");
+        // yangzihan add -> exit前记得关套接字
         exit(EXIT_FAILURE);
     }
 
     // 监听连接
     if (listen(server_fd, 5) == -1) {
         perror("Listen failed");
+        // yangzihan add -> exit前记得关套接字
         exit(EXIT_FAILURE);
     }
 
@@ -95,9 +101,11 @@ int main() {
         fd_set temp_fds = readfds;
 
         // 使用 select() 监视可读事件
+        // yangzihan add -> select指定超时时间，不然select往下遍历的时候超时时间太短会霸占cpu
         activity = select(max_fd + 1, &temp_fds, NULL, NULL, NULL);
         if ((activity < 0) && (errno != EINTR)) {
             perror("Select failed");
+            // yangzihan add -> exit前记得关套接字
             exit(EXIT_FAILURE);
         }
 
@@ -107,6 +115,7 @@ int main() {
             client_addr_len = sizeof(client_addr);
             if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len)) == -1) {
                 perror("Accept failed");
+                // yangzihan add -> exit前记得关套接字
                 exit(EXIT_FAILURE);
             }
 
